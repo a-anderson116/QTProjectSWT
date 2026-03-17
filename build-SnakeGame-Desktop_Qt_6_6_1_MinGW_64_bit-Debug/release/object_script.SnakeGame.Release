@@ -1,0 +1,12 @@
+release/main.o
+release/mainwindow.o
+release/menuscreen.o
+release/gamewidget.o
+release/snake.o
+release/food.o
+release/highscore.o
+release/highscoredialog.o
+release/moc_mainwindow.o
+release/moc_menuscreen.o
+release/moc_gamewidget.o
+release/moc_highscoredialog.o
