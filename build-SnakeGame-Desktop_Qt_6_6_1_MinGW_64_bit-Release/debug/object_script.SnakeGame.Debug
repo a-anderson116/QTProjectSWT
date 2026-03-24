@@ -1,0 +1,12 @@
+debug/main.o
+debug/mainwindow.o
+debug/menuscreen.o
+debug/gamewidget.o
+debug/snake.o
+debug/food.o
+debug/highscore.o
+debug/highscoredialog.o
+debug/moc_mainwindow.o
+debug/moc_menuscreen.o
+debug/moc_gamewidget.o
+debug/moc_highscoredialog.o
