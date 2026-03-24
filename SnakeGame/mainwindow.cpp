@@ -9,7 +9,6 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QWidget>
-#include <QInputDialog>
 #include <QDate>
 
 static const char* TOOLBAR_STYLE =
@@ -80,6 +79,8 @@ void MainWindow::buildUI() {
             this, &MainWindow::onShowHighScores);
     connect(m_gameWidget, &GameWidget::gameOver,
             this, &MainWindow::onGameOver);
+    connect(m_gameWidget, &GameWidget::nameConfirmed,
+            this, &MainWindow::onNameConfirmed);
     connect(m_gameWidget, &GameWidget::restartRequested,
             this, &MainWindow::onRestartRequested);
     connect(m_gameWidget, &GameWidget::menuRequested,
@@ -111,36 +112,6 @@ void MainWindow::showGame() {
     setFixedSize(size());
 }
 
-// ── private helper ────────────────────────────────────────────────────────────
-bool MainWindow::tryRecordScore(int score, GameMode mode, Difficulty diff,
-                                const QString& playerLabel) {
-    if (!HighScoreManager::instance().isHighScore(score, diff))
-        return false;
-
-    bool ok = false;
-    QString name = QInputDialog::getText(
-        this,
-        "🏆  New High Score!",
-        QString("%1 — Score: %2\nEnter your name (max 12 chars):")
-            .arg(playerLabel).arg(score),
-        QLineEdit::Normal,
-        playerLabel,
-        &ok);
-
-    if (!ok) name = playerLabel;
-    if (name.trimmed().isEmpty()) name = "Anonymous";
-    name = name.left(12);
-
-    HighScoreEntry entry;
-    entry.name  = name;
-    entry.score = score;
-    entry.mode  = mode;
-    entry.date  = QDate::currentDate().toString("yyyy-MM-dd");
-
-    HighScoreManager::instance().addEntry(entry, diff);
-    return true;
-}
-
 // ── slots ─────────────────────────────────────────────────────────────────────
 void MainWindow::onStartGame(GameMode mode, Difficulty difficulty) {
     m_lastMode = mode;
@@ -163,28 +134,66 @@ void MainWindow::onGameOver(int score1, int score2, const QString& winner, GameM
     else
         m_infoLabel->setText(QString("%1  P1: %2  P2: %3").arg(winner).arg(score1).arg(score2));
 
-    // Check each qualifying score and prompt for name
-    bool anyHighScore = false;
+    // Build queue of players whose score qualifies for the leaderboard
+    m_pendingScores.clear();
+    auto& mgr = HighScoreManager::instance();
 
     if (mode == GameMode::SinglePlayer) {
-        anyHighScore |= tryRecordScore(score1, mode, m_lastDiff, "Player");
+        if (mgr.isHighScore(score1, m_lastDiff))
+            m_pendingScores.append({"Player", score1});
     } else {
-        anyHighScore |= tryRecordScore(score1, mode, m_lastDiff, "Player 1");
-        anyHighScore |= tryRecordScore(score2, mode, m_lastDiff, "Player 2");
+        if (mgr.isHighScore(score1, m_lastDiff))
+            m_pendingScores.append({"Player 1", score1});
+        if (mgr.isHighScore(score2, m_lastDiff))
+            m_pendingScores.append({"Player 2", score2});
     }
 
-    // Always show the high score dialog after game over
-    HighScoreDialog dlg(m_lastDiff, this);
-    dlg.exec();
+    if (!m_pendingScores.isEmpty())
+        promptNextName();
+    else {
+        HighScoreDialog dlg(m_lastDiff, this);
+        dlg.exec();
+    }
+}
+
+void MainWindow::promptNextName() {
+    const PendingScore& ps = m_pendingScores.first();
+    const QString prompt   = QString("%1  —  Score: %2\nEnter your name:")
+                                 .arg(ps.label).arg(ps.score);
+    m_gameWidget->beginNameEntry(prompt);
+}
+
+void MainWindow::onNameConfirmed(const QString& name) {
+    const PendingScore& ps = m_pendingScores.first();
+
+    HighScoreEntry entry;
+    entry.name  = name.isEmpty() ? ps.label : name.left(12);
+    entry.score = ps.score;
+    entry.mode  = m_lastMode;
+    entry.date  = QDate::currentDate().toString("yyyy-MM-dd");
+    HighScoreManager::instance().addEntry(entry, m_lastDiff);
+
+    m_pendingScores.removeFirst();
+
+    if (!m_pendingScores.isEmpty()) {
+        // Next qualifying player
+        promptNextName();
+    } else {
+        // All names collected — open the leaderboard
+        HighScoreDialog dlg(m_lastDiff, this);
+        dlg.exec();
+    }
 }
 
 void MainWindow::onRestartRequested() {
+    m_pendingScores.clear();
     m_pauseBtn->setEnabled(true);
     m_pauseBtn->setText("⏸ Pause");
     m_gameWidget->startGame(m_lastMode, m_lastDiff);
 }
 
 void MainWindow::onMenuRequested() {
+    m_pendingScores.clear();
     showMenu();
 }
 

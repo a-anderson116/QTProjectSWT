@@ -2,6 +2,8 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QList>
+#include <QPair>
 #include "gamemode.h"
 
 class QStackedWidget;
@@ -22,6 +24,7 @@ private slots:
     void onMenuRequested();
     void onPauseStateChanged(bool paused);
     void onShowHighScores();
+    void onNameConfirmed(const QString& name);
 
 private:
     QStackedWidget* m_stack;
@@ -35,13 +38,14 @@ private:
     GameMode    m_lastMode;
     Difficulty  m_lastDiff;
 
+    // Queue of {playerLabel, score} pairs awaiting name entry
+    struct PendingScore { QString label; int score; };
+    QList<PendingScore> m_pendingScores;
+
     void buildUI();
     void showMenu();
     void showGame();
-
-    // Prompt for a name if the score qualifies; returns true if entry was added
-    bool tryRecordScore(int score, GameMode mode, Difficulty diff,
-                        const QString& playerLabel);
+    void promptNextName();   // shows name entry for front of m_pendingScores
 };
 
 #endif // MAINWINDOW_H

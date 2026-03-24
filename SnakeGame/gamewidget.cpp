@@ -2,6 +2,7 @@
 #include <QPainter>
 #include <QKeyEvent>
 #include <QFont>
+#include <QFontMetrics>
 
 // ── helper: board-to-pixel (accounts for score bar) ─────────────────────────
 static QRect cellRect(int col, int row, int scoreBar, int cellSize) {
@@ -17,11 +18,35 @@ GameWidget::GameWidget(QWidget* parent)
       m_gameMode(GameMode::SinglePlayer),
       m_difficulty(Difficulty::Worm),
       m_gameRunning(false), m_paused(false), m_gameOver(false),
+      m_waitingForName(false),
       m_pendingDir1(Direction::None), m_pendingDir2(Direction::None)
 {
     setFocusPolicy(Qt::StrongFocus);
     setFixedSize(sizeHint());
     connect(&m_timer, &QTimer::timeout, this, &GameWidget::onTimerTick);
+
+    // ── Inline name-entry box ────────────────────────────────────────────────
+    m_nameInput = new QLineEdit(this);
+    m_nameInput->setMaxLength(12);
+    m_nameInput->setPlaceholderText("Enter name...");
+    m_nameInput->setAlignment(Qt::AlignCenter);
+    m_nameInput->setFont(QFont("Courier", 13, QFont::Bold));
+    m_nameInput->setStyleSheet(
+        "QLineEdit {"
+        "  background: #0d1a0d;"
+        "  color: #00ff88;"
+        "  border: 2px solid #00aa55;"
+        "  border-radius: 5px;"
+        "  padding: 4px 10px;"
+        "  selection-background-color: #005533;"
+        "}"
+        "QLineEdit:focus {"
+        "  border-color: #00ff88;"
+        "  background: #0f2010;"
+        "}");
+    m_nameInput->hide();
+    connect(m_nameInput, &QLineEdit::returnPressed,
+            this, &GameWidget::onNameLineEditReturn);
 }
 
 GameWidget::~GameWidget() {
@@ -44,11 +69,15 @@ void GameWidget::startGame(GameMode mode, Difficulty difficulty) {
         m_snake2 = new Snake(QPoint(22, 14), Direction::Left);
     }
 
-    m_pendingDir1 = Direction::None;
-    m_pendingDir2 = Direction::None;
-    m_gameOver    = false;
-    m_paused      = false;
+    m_pendingDir1   = Direction::None;
+    m_pendingDir2   = Direction::None;
+    m_gameOver      = false;
+    m_paused        = false;
+    m_waitingForName = false;
     m_winner.clear();
+
+    m_nameInput->hide();
+    m_nameInput->clear();
 
     spawnFood();
 
@@ -66,8 +95,43 @@ void GameWidget::togglePause() {
     update();
 }
 
+void GameWidget::beginNameEntry(const QString& prompt) {
+    m_waitingForName = true;
+    m_namePrompt     = prompt;
+    m_nameInput->clear();
+    positionNameInput();
+    m_nameInput->show();
+    m_nameInput->setFocus();
+    update();
+}
+
+void GameWidget::positionNameInput() {
+    const int boxW = 260;
+    const int boxH = 38;
+    const int cx   = width() / 2;
+    const int cy   = height() / 2 + 38;   // below the score lines
+    m_nameInput->setGeometry(cx - boxW / 2, cy, boxW, boxH);
+}
+
+// ── slots ────────────────────────────────────────────────────────────────────
+void GameWidget::onNameLineEditReturn() {
+    QString name = m_nameInput->text().trimmed();
+    if (name.isEmpty()) name = "Anonymous";
+
+    m_nameInput->hide();
+    m_nameInput->clear();
+    m_waitingForName = false;
+    update();
+
+    emit nameConfirmed(name);
+}
+
 // ── event handlers ───────────────────────────────────────────────────────────
 void GameWidget::keyPressEvent(QKeyEvent* event) {
+    // While the name box is active let QLineEdit handle all typing;
+    // only block R / M so they don't fire accidentally.
+    if (m_waitingForName) return;
+
     if (m_gameOver) {
         if (event->key() == Qt::Key_R) emit restartRequested();
         if (event->key() == Qt::Key_M) emit menuRequested();
@@ -212,8 +276,11 @@ void GameWidget::paintEvent(QPaintEvent*) {
     if (m_snake2) drawSnake(p, *m_snake2, QColor(0,100,200), QColor(0,160,255));
 
     drawScoreBar(p);
-    if (m_paused)   drawPauseOverlay(p);
-    if (m_gameOver) drawGameOverOverlay(p);
+    if (m_paused)        drawPauseOverlay(p);
+    if (m_gameOver) {
+        if (m_waitingForName) drawNameEntryOverlay(p);
+        else                  drawGameOverOverlay(p);
+    }
 }
 
 void GameWidget::drawBackground(QPainter& p) const {
@@ -244,16 +311,13 @@ void GameWidget::drawFood(QPainter& p) const {
     QPoint pos = m_food.getPosition();
     QRect cr = cellRect(pos.x(), pos.y(), SCORE_BAR, CELL_SIZE);
 
-    // Apple body
     p.setBrush(QColor(210, 30, 30));
     p.setPen(QPen(QColor(160, 10, 10), 1));
     p.drawEllipse(cr.adjusted(2, 3, -2, -2));
 
-    // Stem
     p.setPen(QPen(QColor(90, 50, 0), 2));
     p.drawLine(cr.center().x(), cr.top() + 3, cr.center().x() + 3, cr.top());
 
-    // Leaf hint
     p.setPen(QPen(QColor(0, 140, 0), 1));
     p.drawLine(cr.center().x() + 1, cr.top() + 1, cr.center().x() + 4, cr.top() + 3);
 }
@@ -271,16 +335,15 @@ void GameWidget::drawSnake(QPainter& p, const Snake& s,
             p.setPen(QPen(headColor.darker(160), 1));
             p.drawRoundedRect(cr.adjusted(1,1,-1,-1), 4, 4);
 
-            // Eyes
             p.setBrush(Qt::black);
             p.setPen(Qt::NoPen);
             Direction dir = s.getDirection();
             QPoint e1, e2;
             const int eo = 4, es = 3;
-            if      (dir == Direction::Right) { e1 = {cr.right()-eo-es, cr.top()+eo};    e2 = {cr.right()-eo-es, cr.bottom()-eo-es}; }
-            else if (dir == Direction::Left)  { e1 = {cr.left()+eo,    cr.top()+eo};    e2 = {cr.left()+eo,    cr.bottom()-eo-es}; }
-            else if (dir == Direction::Up)    { e1 = {cr.left()+eo,    cr.top()+eo};    e2 = {cr.right()-eo-es, cr.top()+eo};    }
-            else                              { e1 = {cr.left()+eo,    cr.bottom()-eo-es}; e2 = {cr.right()-eo-es, cr.bottom()-eo-es}; }
+            if      (dir == Direction::Right) { e1 = {cr.right()-eo-es, cr.top()+eo};       e2 = {cr.right()-eo-es, cr.bottom()-eo-es}; }
+            else if (dir == Direction::Left)  { e1 = {cr.left()+eo,     cr.top()+eo};       e2 = {cr.left()+eo,     cr.bottom()-eo-es}; }
+            else if (dir == Direction::Up)    { e1 = {cr.left()+eo,     cr.top()+eo};       e2 = {cr.right()-eo-es, cr.top()+eo};      }
+            else                              { e1 = {cr.left()+eo,     cr.bottom()-eo-es}; e2 = {cr.right()-eo-es, cr.bottom()-eo-es}; }
             p.drawEllipse(e1.x(), e1.y(), es, es);
             p.drawEllipse(e2.x(), e2.y(), es, es);
         } else {
@@ -349,4 +412,48 @@ void GameWidget::drawGameOverOverlay(QPainter& p) const {
     p.setPen(Qt::white);
     p.drawText(QRect(0, height()/2 - 55, width(), 130), Qt::AlignCenter,
                details + "\n\n[ R ] Restart     [ M ] Menu");
+}
+
+void GameWidget::drawNameEntryOverlay(QPainter& p) const {
+    // Dark backdrop
+    p.fillRect(rect(), QColor(0, 0, 0, 190));
+
+    const int cx = width() / 2;
+    int y = height() / 2 - 115;
+
+    // ── Trophy banner ─────────────────────────────────────────────────────
+    p.setFont(QFont("Courier", 22, QFont::Bold));
+    p.setPen(QColor(255, 215, 0));
+    p.drawText(QRect(0, y, width(), 40), Qt::AlignCenter, "🏆  NEW HIGH SCORE!");
+    y += 48;
+
+    // ── Score line ────────────────────────────────────────────────────────
+    p.setFont(QFont("Courier", 13));
+    p.setPen(QColor(200, 200, 200));
+
+    // Parse the prompt: first line is "Player — Score: N", second is the label
+    QStringList lines = m_namePrompt.split('\n');
+    for (const QString& line : lines) {
+        p.drawText(QRect(0, y, width(), 22), Qt::AlignCenter, line);
+        y += 22;
+    }
+    y += 6;
+
+    // ── Input box frame (drawn behind QLineEdit) ──────────────────────────
+    const int boxW = 264;
+    const int boxH = 42;
+    QRect boxRect(cx - boxW / 2 - 2, y - 2, boxW + 4, boxH + 4);
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(QColor(0, 180, 80), 1));
+    p.drawRoundedRect(boxRect, 7, 7);
+
+    // y for QLineEdit is set in positionNameInput(); the widget renders itself.
+
+    y += boxH + 12;
+
+    // ── Hint ─────────────────────────────────────────────────────────────
+    p.setFont(QFont("Courier", 10));
+    p.setPen(QColor(80, 80, 80));
+    p.drawText(QRect(0, y, width(), 20), Qt::AlignCenter,
+               "[ ENTER ] to confirm  ·  max 12 characters");
 }
